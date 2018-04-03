@@ -49,3 +49,7 @@ _testmain.go
 *.test
 
 
+# Application-specific
+.envrc
+
+
