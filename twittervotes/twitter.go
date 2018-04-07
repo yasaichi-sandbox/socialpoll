@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/garyburd/go-oauth/oauth"
 	"github.com/joeshaw/envdecode"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -96,4 +98,50 @@ func makeRequest(req *http.Request, params url.Values) (*http.Response, error) {
 	}
 
 	return httpClient.Do(req)
+}
+
+type tweet struct {
+	Text string
+}
+
+func readFromTwitter(votes chan<- string) {
+	options, err := loadOptions()
+	if err != nil {
+		log.Println("選択肢の読み込みに失敗しました:", err)
+		return
+	}
+
+	query := make(url.Values)
+	query.Set("track", strings.Join(options, ","))
+	req, err := http.NewRequest(
+		"POST",
+		"https://stream.twitter.com/1.1/statuses/filter.json",
+		strings.NewReader(query.Encode()),
+	)
+	if err != nil {
+		log.Println("検索のリクエストの作成に失敗しました:", err)
+		return
+	}
+
+	res, err := makeRequest(req, query)
+	if err != nil {
+		log.Println("検索のリクエストに失敗しました:", err)
+		return
+	}
+
+	reader := res.Body
+	decoder := json.NewDecoder(reader)
+	for {
+		var tweet tweet
+		if err := decoder.Decode(&tweet); err != nil {
+			break
+		}
+
+		for _, option := range options {
+			if strings.Contains(strings.ToLower(tweet.Text), option) {
+				log.Println("投票:", option)
+				votes <- option
+			}
+		}
+	}
 }
