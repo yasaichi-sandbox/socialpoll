@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"gopkg.in/mgo.v2"
+	"log"
 	"os"
 )
 
@@ -21,5 +23,17 @@ func main() {
 		}
 	}()
 
-	// do something
+	log.Println("データベースに接続します...")
+	db, err := mgo.Dial("localhost")
+	if err != nil {
+		fatal(err)
+		return
+	}
+	defer func() {
+		log.Println("データベース接続を閉じます...")
+		db.Close()
+	}()
+
+	pollData := db.DB("ballots").C("polls")
+	_ = pollData
 }
