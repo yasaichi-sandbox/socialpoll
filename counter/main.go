@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"github.com/bitly/go-nsq"
 	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 	"log"
 	"os"
 	"sync"
+	"time"
 )
 
 var fatalErr error
@@ -17,6 +19,8 @@ func fatal(e error) {
 	flag.PrintDefaults()
 	fatalErr = e
 }
+
+const updateDuration = 1 * time.Second
 
 func main() {
 	defer func() {
@@ -36,9 +40,6 @@ func main() {
 		db.Close()
 	}()
 
-	pollData := db.DB("ballots").C("polls")
-	_ = pollData
-
 	var countsLock sync.Mutex
 	var counts map[string]int
 
@@ -54,6 +55,7 @@ func main() {
 		countsLock.Lock()
 		defer countsLock.Unlock()
 
+		// NOTE: counts can be `nil` when `updater` succeeds to update collection in the DB
 		if counts == nil {
 			counts = make(map[string]int)
 		}
@@ -68,4 +70,44 @@ func main() {
 		fatal(err)
 		return
 	}
+
+	log.Println("NSQ上での投票を待機します...")
+	var updater *time.Timer
+
+	pollData := db.DB("ballots").C("polls")
+	updater = time.AfterFunc(updateDuration, func() {
+		countsLock.Lock()
+		defer countsLock.Unlock()
+
+		if len(counts) == 0 {
+			log.Println("新しい投票はありません。データベースの更新をスキップします")
+			updater.Reset(updateDuration)
+			return
+		}
+
+		log.Println("データベースを更新します...")
+		log.Println(counts)
+		ok := true
+
+		for option, count := range counts {
+			// NOTE: `bson.M` stands for Map of BSON(Binary JSON)
+			selector := bson.M{"options": bson.M{"$in": []string{option}}}
+			update := bson.M{"$inc": bson.M{("results." + option): count}}
+
+			if _, err := pollData.UpdateAll(selector, update); err != nil {
+				log.Println("更新に失敗しました:", err)
+				ok = false
+				continue
+			}
+
+			counts[option] = 0
+		}
+
+		if ok {
+			log.Println("データベースの更新が完了しました")
+			counts = nil
+		}
+
+		updater.Reset(updateDuration)
+	})
 }
