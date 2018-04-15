@@ -8,7 +8,9 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"log"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -110,4 +112,17 @@ func main() {
 
 		updater.Reset(updateDuration)
 	})
+
+	termChan := make(chan os.Signal, 1)
+	signal.Notify(termChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	for {
+		select {
+		case <-termChan:
+			updater.Stop()
+			consumer.Stop()
+		case <-consumer.StopChan:
+			return
+		}
+	}
 }
