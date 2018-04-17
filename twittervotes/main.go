@@ -1,14 +1,13 @@
 package main
 
 import (
+	"context"
 	"github.com/bitly/go-nsq"
 	"gopkg.in/mgo.v2"
 	"log"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
-	"time"
 )
 
 var db *mgo.Session
@@ -50,41 +49,27 @@ func loadOptions() ([]string, error) {
 	return options, iter.Err()
 }
 
-func publishVotes(votes <-chan string) <-chan struct{} {
-	stopchan := make(chan struct{}, 1)
+func publishVotes(votes <-chan string) {
 	producer, _ := nsq.NewProducer("localhost:4150", nsq.NewConfig())
 
-	go func() {
-		for vote := range votes {
-			producer.Publish("votes", []byte(vote))
-		}
+	for vote := range votes {
+		producer.Publish("votes", []byte(vote))
+	}
 
-		log.Println("Publisher: 停止中です")
-		producer.Stop()
-		log.Println("Publisher: 停止しました")
-		stopchan <- struct{}{}
-	}()
-
-	return stopchan
+	log.Println("Publisher: 停止中です")
+	producer.Stop()
+	log.Println("Publisher: 停止しました")
 }
 
 func main() {
-	var stoplock sync.Mutex
-
-	stop := false
-	stopChan := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	signalChan := make(chan os.Signal, 1)
 
 	go func() {
 		<-signalChan
 
-		stoplock.Lock()
-		stop = true
-		stoplock.Unlock()
-
+		cancel()
 		log.Println("停止します...")
-		stopChan <- struct{}{}
-		closeConn()
 	}()
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -94,27 +79,6 @@ func main() {
 	defer closedb()
 
 	votes := make(chan string)
-	publisherStoppedChan := publishVotes(votes)
-	twitterStoppedChan := startTwitterStream(stopChan, votes)
-
-	go func() {
-		for {
-			time.Sleep(1 * time.Minute)
-			// めちゃくちゃわかりづらいが、次のようにして間接的にTwitterへの接続が切断される
-			// reader.Close() -> decoder.Decode(&tweet) != nil -> readFromTwitterが終了 ->
-			// startTwitterStreamで10秒待機 -> 再接続 -> 約50秒後に再度reader.Close() -> ...
-			closeConn()
-
-			stoplock.Lock()
-			if stop {
-				stoplock.Unlock()
-				break
-			}
-			stoplock.Unlock()
-		}
-	}()
-
-	<-twitterStoppedChan
-	close(votes)
-	<-publisherStoppedChan
+	go twitterStream(ctx, votes)
+	publishVotes(votes)
 }

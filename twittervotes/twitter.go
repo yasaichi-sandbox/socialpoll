@@ -6,6 +6,7 @@ import (
 	"github.com/garyburd/go-oauth/oauth"
 	"github.com/joeshaw/envdecode"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -18,32 +19,7 @@ import (
 
 var conn net.Conn
 
-func dialContext(_ context.Context, netw, addr string) (net.Conn, error) {
-	if conn != nil {
-		conn.Close()
-		conn = nil
-	}
-
-	netc, err := net.DialTimeout(netw, addr, 5*time.Second)
-	if err != nil {
-		return nil, err
-	}
-
-	conn = netc
-	return netc, nil
-}
-
 var reader io.ReadCloser
-
-func closeConn() {
-	if conn != nil {
-		conn.Close()
-	}
-
-	if reader != nil {
-		reader.Close()
-	}
-}
 
 var (
 	authClient *oauth.Client
@@ -78,33 +54,36 @@ var (
 	httpClient    *http.Client
 )
 
-func makeRequest(req *http.Request, params url.Values) (*http.Response, error) {
+func makeRequest(query url.Values) (*http.Request, error) {
 	authSetupOnce.Do(func() {
 		setupTwitterAuth()
-		httpClient = &http.Client{
-			Transport: &http.Transport{
-				DialContext: dialContext,
-			},
-		}
 	})
 
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Content-Length", strconv.Itoa(len(params.Encode()))) // Itoa stands for "Integer to ASCII"
-
-	// See http://tools.ietf.org/html/rfc5849#section-3.5.1
-	err := authClient.SetAuthorizationHeader(req.Header, creds, "POST", req.URL, params)
+	formEnc := query.Encode()
+	req, err := http.NewRequest(
+		"POST",
+		"https://stream.twitter.com/1.1/statuses/filter.json",
+		strings.NewReader(formEnc),
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	return httpClient.Do(req)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Length", strconv.Itoa(len(formEnc))) // Itoa stands for "Integer to ASCII"
+	// See http://tools.ietf.org/html/rfc5849#section-3.5.1
+	authClient.SetAuthorizationHeader(req.Header, creds, "POST", req.URL, query)
+
+	return req, nil
 }
 
 type tweet struct {
 	Text string
 }
 
-func readFromTwitter(votes chan<- string) {
+// NOTE: We should pass a Context explicitly to each function that needs it.
+// The Context should be the first parameter, typically named ctx.
+func readFromTwitter(ctx context.Context, votes chan<- string) {
 	options, err := loadOptions()
 	if err != nil {
 		log.Println("選択肢の読み込みに失敗しました:", err)
@@ -113,60 +92,79 @@ func readFromTwitter(votes chan<- string) {
 
 	query := make(url.Values)
 	query.Set("track", strings.Join(options, ","))
-	req, err := http.NewRequest(
-		"POST",
-		"https://stream.twitter.com/1.1/statuses/filter.json",
-		strings.NewReader(query.Encode()),
-	)
+	req, err := makeRequest(query)
 	if err != nil {
 		log.Println("検索のリクエストの作成に失敗しました:", err)
 		return
 	}
 
-	res, err := makeRequest(req, query)
+	client := &http.Client{}
+	if deadline, ok := ctx.Deadline(); ok {
+		client.Timeout = deadline.Sub(time.Now())
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		log.Println("検索のリクエストに失敗しました:", err)
 		return
 	}
 
-	reader := res.Body
-	decoder := json.NewDecoder(reader)
-	for {
-		var tweet tweet
-		if err := decoder.Decode(&tweet); err != nil {
-			break
-		}
-
-		for _, option := range options {
-			if strings.Contains(strings.ToLower(tweet.Text), option) {
-				log.Println("投票:", option)
-				votes <- option
-			}
-		}
-	}
-}
-
-func startTwitterStream(stopchan <-chan struct{}, votes chan<- string) <-chan struct{} {
-	stoppedchan := make(chan struct{}, 1)
+	done := make(chan struct{})
+	defer func() { <-done }()
 
 	go func() {
-		defer func() {
-			stoppedchan <- struct{}{}
-		}()
+		defer close(done)
+		log.Println("res:", res.StatusCode)
 
+		if res.StatusCode != 200 {
+			body, _ := ioutil.ReadAll(res.Body)
+			log.Printf("res body: %s\n", string(body))
+
+			return
+		}
+
+		decoder := json.NewDecoder(res.Body)
 		for {
-			select {
-			case <-stopchan:
-				log.Println("Twitterへの問い合わせを終了します...")
-				return
-			default:
-				log.Println("Twitterに問い合わせます...")
-				readFromTwitter(votes)
-				log.Println("（待機中）")
-				time.Sleep(10 * time.Second)
+			var tweet tweet
+			if err := decoder.Decode(&tweet); err != nil {
+				break
+			}
+
+			log.Println("tweet:", tweet)
+			for _, option := range options {
+				if strings.Contains(strings.ToLower(tweet.Text), option) {
+					log.Println("投票:", option)
+					votes <- option
+				}
 			}
 		}
 	}()
+	defer res.Body.Close()
 
-	return stoppedchan
+	select {
+	case <-ctx.Done():
+	case <-done: // NOTE: receives zero value after the channel is closed
+	}
+}
+
+func readFromTwitterWithTimeout(ctx context.Context, timeout time.Duration, votes chan<- string) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	readFromTwitter(ctx, votes)
+}
+
+func twitterStream(ctx context.Context, votes chan<- string) {
+	defer close(votes)
+
+	for {
+		log.Println("Twitterに問い合わせます...")
+		readFromTwitterWithTimeout(ctx, 1*time.Minute, votes)
+		log.Println("（待機中）")
+
+		select {
+		case <-ctx.Done():
+			log.Println("Twitterへの問い合わせを終了します...")
+			return
+		case <-time.After(10 * time.Second):
+		}
+	}
 }
