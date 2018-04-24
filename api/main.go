@@ -1,6 +1,7 @@
 package main
 
 import (
+	"gopkg.in/mgo.v2"
 	"net/http"
 )
 
@@ -23,4 +24,14 @@ func isValidAPIKey(key string) bool {
 
 func respondErr(w http.ResponseWriter, r *http.Request, status int, args ...interface{}) {
 	// TODO: Implement later
+}
+
+func withData(d *mgo.Session, f http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		thisDb := d.Copy()
+		defer thisDb.Close()
+
+		SetVar(r, "db", thisDb.DB("ballots"))
+		f(w, r)
+	}
 }
