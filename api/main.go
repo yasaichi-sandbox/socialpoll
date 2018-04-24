@@ -35,3 +35,12 @@ func withData(d *mgo.Session, f http.HandlerFunc) http.HandlerFunc {
 		f(w, r)
 	}
 }
+
+func withVars(fn http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		OpenVars(r)
+		defer CloseVars(r)
+
+		fn(w, r)
+	}
+}
