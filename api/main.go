@@ -30,10 +30,6 @@ func main() {
 	log.Println("停止します...")
 }
 
-func handlePolls(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement the body later
-}
-
 func withAPIKey(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isValidAPIKey(r.URL.Query().Get("key")) {
