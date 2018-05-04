@@ -1,0 +1,54 @@
+<html>
+
+<head>
+  <title>調査項目の作成</title>
+  <link rel="stylesheet" href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css">
+</head>
+
+<body>
+  <div class="container">
+    <div class="col-md-4"></div>
+    <form id="poll" role="form" class="col-md-4">
+      <h2>調査項目の作成</h2>
+      <div class="form-group">
+        <label for="title">タイトル</label>
+        <input type="text" class="form-control" id="title" placeholder="Title">
+      </div>
+      <div class="form-group">
+        <label for="options">選択肢</label>
+        <input type="text" class="form-control" id="options" placeholder="Options">
+        <p class="help-block">（カンマで区切って入力）</p>
+      </div>
+      <button type="submit" class="btn btn-primary">作成</button>
+      または
+      <a href="/">キャンセル</a>
+    </form>
+    <div class="col-md-4"></div>
+  </div>
+
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+  <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  <script>
+    $(() => {
+      const form = $('form#poll');
+
+      form.submit((e) => {
+        e.preventDefault();
+
+        const title = form.find('input#title').val();
+        const options = form.find('input#options').val()
+          .split(',')
+          .map((option) => option.trim()) // e.g. ' foo  '.trim() => 'foo'
+
+        $.post(
+          'http://localhost:8080/polls/?key=abc123',
+          JSON.stringify({ title, options })
+        ).done((_, __, jqXHR) => {
+          location.href = `view.html?poll=${jqXHR.getResponseHeader('Location')}`;
+        });
+      });
+    });
+  </script>
+</body>
+
+</html>
