@@ -25,7 +25,7 @@ func handlePolls(w http.ResponseWriter, r *http.Request) {
 		handlePollsDelete(w, r)
 		return
 	case "OPTIONS":
-		w.Header().Add("Access-Controll-Request-Method", "DELETE")
+		w.Header().Add("Access-Control-Allow-Methods", "DELETE")
 		respond(w, r, http.StatusOK, nil)
 		return
 	}
@@ -69,7 +69,7 @@ func handlePollsPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Location", "/polls/"+p.ID.Hex())
+	w.Header().Set("Location", "polls/"+p.ID.Hex())
 	respond(w, r, http.StatusCreated, nil)
 }
 
